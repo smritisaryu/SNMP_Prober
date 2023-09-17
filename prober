@@ -1,0 +1,162 @@
+#!/usr/bin/python3
+import time
+import sys
+import math
+from easysnmp import Session, EasySNMPTimeoutError,
+EasySNMPConnectionError
+agnt_inp = sys.argv
+RequestInterval = 1 / float(agnt_inp[2])
+ip, port, commun = agnt_inp[1].split(':')
+ReqSamp = int(sys.argv[3])
+ObjIDs = []
+initOID = []
+time_laststamp = ""
+dt1_NextTime = 0
+global dt2_NextTime
+def pre_initOIDs():
+global ObjIDs
+for x in range(4, len(agnt_inp)):
+ObjIDs.append(sys.argv[x])
+ObjIDs.insert(0, '1.3.6.1.2.1.1.3.0')
+def getResp():
+probe_session = Session(hostname=ip, remote_port=port,
+community='public', version=2, timeout=1, retries=2)
+#return probe_session.get(ObjIDs)
+try:
+return probe_session.get(ObjIDs)
+except (EasySNMPTimeoutError, EasySNMPConnectionError):
+# print("SNMP Timeout or Connection Error. Retrying in 5
+seconds...")
+time.sleep(3) # Wait for 5 seconds before retrying
+try:
+return probe_session.get(ObjIDs) # Retry getting the response
+except (EasySNMPTimeoutError, EasySNMPConnectionError):
+# print("Retried but still encountering SNMP Timeout or
+Connection Error.")
+return None
+def getResp_process(resp):
+global initOID, time_laststamp, dt1_NextTime
+nxtOID = []
+dt2_NxtTime = time.time()
+dt2_NextTime = int(resp[0].value)/100
+for y in range(1, len(resp)):
+if resp[y].value != 'NOSUCHINSTANCE' and resp[y].value !=
+'NOSUCHOBJECT':
+#if resp[y].snmp_type == 'COUNTER64' or resp[y].snmp_type ==
+'COUNTER32' or resp[y].snmp_type == 'COUNTER' or resp[y].snmp_type ==
+'GAUGE':
+if resp[y].snmp_type in
+['COUNTER64','COUNTER','COUNTER32','GAUGE']:
+nxtOID.append(int(resp[y].value))
+#numRate = int(nxtOID[y - 1]) - int(initOID[y - 1])
+else:
+nxtOID.append(resp[y].value)
+#nxtOID.append(int(resp[y].value))
+if ReqSamp != 0 and len(initOID) > 0:
+if dt2_NextTime > dt1_NextTime:
+if resp[y].snmp_type in ['COUNTER32', 'COUNTER64',
+'COUNTER']:
+numRate = int(nxtOID[y - 1]) - int(initOID[y - 1])
+dt_agent = (dt2_NextTime - dt1_NextTime)
+rate = (numRate / dt_agent)
+rate = round(rate)
+if rate < 0:
+if resp[y].snmp_type == 'COUNTER64':
+numRate = numRate + 2 ** 64
+elif resp[y].snmp_type == 'COUNTER32' or
+resp[y].snmp_type == 'COUNTER':
+numRate = numRate + 2 ** 32
+try:
+if time_laststamp == str(dt2_NxtTime):
+print(str(round(numRate / dt_agent)),
+end="|")
+else:
+print(str(int(dt2_NxtTime)) + "|" +
+str(round(numRate / dt_agent)), end="|")
+time_laststamp = str(dt2_NxtTime)
+except:
+print(str(int(dt2_NxtTime)) + "|" +
+str(int(round(numRate / dt_agent))), end="|")
+time_laststamp = str(dt2_NxtTime)
+elif resp[y].snmp_type == 'GAUGE':
+numRate = int(nxtOID[y - 1]) - int(initOID[y - 1])
+if numRate>0: numRate="+"+str(numRate)
+try:
+if time_laststamp == str(dt2_NxtTime):
+print(nxtOID[len(nxtOID) - 1], "(" +
+str(numRate), ")", end="|")
+else:
+print(
+str(int(dt2_NxtTime)) + "|" +
+str(nxtOID[len(nxtOID) - 1]) + "(" + str(numRate) + ")", end="|")
+time_laststamp = str(dt2_NxtTime)
+except:
+print(
+str(int(dt2_NxtTime)) + "|" +
+str(nxtOID[len(nxtOID) - 1]) + "(" + str(numRate) + ")", end="|")
+time_laststamp = str(dt2_NxtTime)
+elif resp[y].snmp_type == 'OCTETSTR':
+#numRate = int(nxtOID[y - 1]) - int(initOID[y - 1])
+#numRate="+"+str(numRate)
+try:
+if time_laststamp == str(dt2_NxtTime):
+print(nxtOID[len(nxtOID) - 1], end="|")
+else:
+print(
+str(int(dt2_NxtTime)) + "|" +
+str(nxtOID[len(nxtOID) - 1]), end="|")
+time_laststamp = str(dt2_NxtTime)
+except:
+print(
+str(int(dt2_NxtTime)) + "|" +
+str(nxtOID[len(nxtOID) - 1]), end="|")
+time_laststamp = str(dt2_NxtTime)
+else:
+print("System Restarted..")
+initOID[:] = nxtOID
+dt1_NextTime = dt2_NextTime
+def run_probe():
+pre_initOIDs()
+s = 0
+initOID = []
+probe_session = Session(hostname=ip, remote_port=port,
+community='public')
+while True:
+dt2_NextTime = time.time()
+resp = getResp()
+#dt2_NextTime = int(resp[0].value)/100
+getResp_process(resp)
+if s != 0:
+print(end="\n")
+timenow = time.time()
+s += 1
+#time.sleep(abs(RequestInterval - timenow + dt2_NextTime))
+if RequestInterval >= timenow - dt2_NextTime:
+time.sleep(abs(RequestInterval - timenow + dt2_NextTime))
+else:
+m = math.ceil((timenow - dt2_NextTime) / RequestInterval)
+time.sleep(((m * RequestInterval) - timenow + dt2_NextTime))
+#time.sleep(abs(RequestInterval - timenow + dt2_NextTime))
+def run_sample():
+pre_initOIDs()
+initOID = []
+probe_session = Session(hostname=ip, remote_port=port,
+community='public', version=2)
+for s in range(0, ReqSamp + 1):
+dt2_NextTime = time.time() # Set the value of dt2_NextTime
+resp = getResp()
+#dt2_NextTime = int(resp[0].value)/100
+getResp_process(resp)
+if s != 0:
+print(end="\n")
+timenow = time.time()
+if RequestInterval >= timenow - dt2_NextTime:
+time.sleep(abs(RequestInterval - timenow + dt2_NextTime))
+else:
+m = math.ceil((timenow - dt2_NextTime) / RequestInterval)
+time.sleep(((m * RequestInterval) - timenow + dt2_NextTime))
+#time.sleep(abs(RequestInterval - timenow + dt2_NextTime))
+if ReqSamp == -1:
+run_probe()
+else:
+run_sample()
