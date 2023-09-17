@@ -1,116 +1,117 @@
 #!/usr/bin/python3
-import easysnmp
 import time
 import sys
-import math
 from easysnmp import Session
-from easysnmp.exceptions import EasySNMPTimeoutError
 
-agent_input = sys.argv
-sample_time = 1 / float(agent_input[2])
-ip, port, community = agent_input[1].split(':')
-sample = int(sys.argv[3])
-sample_freq = float(agent_input[2])
+agnt_inp = sys.argv
+RequestInterval = 1 / float(agnt_inp[2])
+ip, port, commun = agnt_inp[1].split(':')
+ReqSamp = int(sys.argv[3])
 
-oids = []
-init_oid = []
-next_oid = []
-unixclock = ""
+ObjIDs = []
+initOID = []
+time_laststamp = ""
+dt1_NextTime = 0
 
-for x in range(4, len(agent_input)):
-    oids.append(sys.argv[x])
-oids.insert(0, '1.3.6.1.2.1.1.3.0')
 
-sesh = Session(hostname=ip, remote_port=port, community='public', version=2, timeout=1, retries=3)
+def pre_initOIDs():
+    global ObjIDs
+    for x in range(4, len(agnt_inp)):
+        ObjIDs.append(sys.argv[x])
+    ObjIDs.insert(0, '1.3.6.1.2.1.1.3.0')
 
-def rate_calculator():
-    global init_oid, init_time
+
+def getResp():
+    probe_session = Session(hostname=ip, remote_port=port, community='public', version=2, timeout=0.1, retries=2)
+    return probe_session.get(ObjIDs)
+
+
+def getResp_process(resp):
+    global initOID, time_laststamp, dt1_NextTime
+
+    nxtOID = []
+    dt2_NextTime = time.time()
+
+    for y in range(1, len(resp)):
+        nxtOID.append(int(resp[y].value))
+
+        if ReqSamp != 0 and len(initOID) > 0:
+            numRate = int(nxtOID[y - 1]) - int(initOID[y - 1])
+            dt_agent = round(dt2_NextTime - dt1_NextTime, 1)
+            rate = (numRate / dt_agent)
+            if resp[y].snmp_type in ['COUNTER32', 'COUNTER64', 'COUNTER']:
+                if rate < 0:
+                    if resp[y].snmp_type == 'COUNTER64':
+                        numRate = numRate + 2 ** 64
+                    elif resp[y].snmp_type == 'COUNTER32' or resp[y].snmp_type == 'COUNTER':
+                        numRate = numRate + 2 ** 32
+
+                try:
+                    if time_laststamp == str(dt2_NextTime):
+                        print(str(int(numRate / dt_agent)), end="|")
+                    else:
+                        print(str(int(dt2_NextTime)) + "|" + str(int(numRate / dt_agent)), end="|")
+                        time_laststamp = str(dt2_NextTime)
+                except:
+                    print(str(int(dt2_NextTime)) + "|" + str(int(round(numRate / dt_agent))), end="|")
+                    time_laststamp = str(dt2_NextTime)
+
+            elif resp[y].snmp_type == 'GAUGE':
+                numRate = int(nxtOID[y - 1]) - int(initOID[y - 1])
+                if numRate>0: numRate="+"+str(numRate)
+                try:
+                    if time_laststamp == str(dt2_NextTime):
+                        print(nxtOID[len(nxtOID) - 1], "(" + str(numRate), ")", end="|")
+                    else:
+                        print(
+                            str(int(dt2_NextTime)) + "|" + str(nxtOID[len(nxtOID) - 1]) + "(" + str(numRate) + ")", end="|")
+                        time_laststamp = str(dt2_NextTime)
+                except:
+                    print(
+                        str(int(dt2_NextTime)) + "|" + str(nxtOID[len(nxtOID) - 1]) + "(" + str(numRate) + ")", end="|")
+                    time_laststamp = str(dt2_NextTime)
+
+    initOID[:] = nxtOID
+    dt1_NextTime = dt2_NextTime
+
+
+def run_probe():
+    pre_initOIDs()
+    s = 0
+    initOID = []
+    probe_session = Session(hostname=ip, remote_port=port, community='public', version=2)
+
     while True:
-        try:
-            retort = sesh.get(oids)
-            break
-        except EasySNMPTimeoutError:
-            #print("Connection timed out. Retrying in 5 seconds...")
-            time.sleep(5)
-    next_oid = []
+        dt2_NextTime = time.time()
+        resp = getResp()
+        getResp_process(resp)
 
-    for y in range(1, len(retort)):
-        if retort[y].value != 'NOSUCHINSTANCE' and retort[y].value != 'NOSUCHOBJECT':
-            if retort[y].snmp_type == 'COUNTER64' or retort[y].snmp_type == 'COUNTER32' or retort[y].snmp_type == 'COUNTER' or retort[y].snmp_type == 'GAUGE':
-                next_oid.append(int(retort[y].value))
-            else:
-                next_oid.append(retort[y].value)
-            if sample != 0 and len(init_oid) > 0:
-                if retort[y].snmp_type in ['COUNTER32', 'COUNTER64','COUNTER']:
-                    numerator = int(next_oid[y - 1]) - int(init_oid[y - 1])
-                    denominator = round(next_time - init_time, 1)
-                    rate = (numerator / denominator)
-                    
-                    if rate < 0:
-                        if retort[y].snmp_type == 'COUNTER64':
-                            numerator = numerator + 2 ** 64
-                        elif retort[y].snmp_type == 'COUNTER32' or retort[y].snmp_type == 'COUNTER':
-                            numerator = numerator + 2 ** 32
-                    try:
-                        if unixclock == str(next_time):
-                            print(str(round(numerator / denominator)), end="|")
-                        else:
-                            print(str(next_time) + "|" + str(round(numerator / denominator)), end="|")
-                            unixclock = str(next_time)
-                    except:
-                        print(str(next_time) + "|" + str(round(numerator / denominator)), end="|")
-                        unixclock = str(next_time)
-
-                elif retort[y].snmp_type == 'GAUGE':
-                    numerator = int(next_oid[y - 1]) - int(init_oid[y - 1])
-                    try:
-                        if unixclock == str(next_time):
-                            print(next_oid[len(next_oid) - 1], "(" + str(numerator) , ")", end="|")
-                        else:
-                            print(str(next_time) + "|" + str(next_oid[len(next_oid) - 1]) + "(" + str(numerator) + ")", end="|")
-                            unixclock = str(next_time)
-                    except:
-                        print(str(next_time) + "|" + str(next_oid[len(next_oid) - 1]) + "(" + str(numerator) + ")", end="|")
-                        unixclock = str(next_time)
-
-                elif retort[y].snmp_type == 'OCTETSTR':
-                    try:
-                        if unixclock == str(next_time):
-                            print(str(next_oid[len(next_oid) - 1]),end= "|")
-                        else:
-                            print(next_time, "|", str(next_oid[len(next_oid) - 1]), end="|")
-                            unixclock = str(next_time)
-                    except:
-                        print(str(next_time) + "|" + str(next_oid[len(next_oid) - 1]),end="|")
-                        unixclock = str(next_time)
-    init_oid[:] = next_oid    
-    init_time = next_time
-
-if sample == -1:
-    count = 0
-    init_oid = []
-    while True:
-        next_time = time.time()
-        rate_calculator()
-        if count != 0:
+        if s != 0:
             print(end="\n")
-        retort_time = time.time()
-        count = count + 1
-        if  sample_time >= retort_time - next_time:
-            time.sleep(abs(sample_time - retort_time + next_time))
-        else:
-            m = math.ceil((retort_time - next_time) / sample_time)
-            time.sleep(((m * sample_time) - retort_time + next_time))
+
+        timenow = time.time()
+        s += 1
+        time.sleep(abs(RequestInterval - timenow + dt2_NextTime))
+
+
+def run_sample():
+    pre_initOIDs()
+    initOID = []
+    probe_session = Session(hostname=ip, remote_port=port, community='public', version=2)
+
+    for s in range(0, ReqSamp + 1):
+        dt2_NextTime = time.time()  # Set the value of dt2_NextTime
+        resp = getResp()
+        getResp_process(resp)
+
+        if s != 0:
+            print(end="\n")
+
+        timenow = time.time()
+        time.sleep(abs(RequestInterval - timenow + dt2_NextTime))
+
+
+if ReqSamp == -1:
+    run_probe()
 else:
-    init_oid = []
-    for count in range(0, sample + 1):
-        next_time = time.time()
-        rate_calculator()
-        if count != 0:
-            print(end="\n")
-        retort_time = time.time()
-        if  sample_time >= retort_time - next_time:
-            time.sleep(abs(sample_time - retort_time + next_time))
-        else:
-            m = math.ceil((retort_time - next_time) / sample_time)
-            time.sleep(((m * sample_time) - retort_time + next_time))
+    run_sample()
